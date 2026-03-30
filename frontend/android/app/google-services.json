@@ -1,0 +1,46 @@
+{
+  "project_info": {
+    "project_number": "720823219300",
+    "project_id": "carebit-e30d4",
+    "storage_bucket": "carebit-e30d4.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:720823219300:android:50770bb8f93885729fdb71",
+        "android_client_info": {
+          "package_name": "com.carebit.frontend"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "720823219300-6jm99lpj2fm86plsm6sseivtdh42n0tu.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyCXKIjztxG5R_2YuMHmA0bDUQTr2E-wwP0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "720823219300-6jm99lpj2fm86plsm6sseivtdh42n0tu.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "720823219300-kg89bk20maktr5peqcr72nhr1fd58b1r.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.carebit.frontend"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
