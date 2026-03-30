@@ -1,8 +1,13 @@
+import 'dart:convert';
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_client/constants/app_constants.dart';
 import 'package:mobile_client/constants/route_paths.dart';
+import 'package:url_launcher/url_launcher.dart';
 
+import '../../../app/fitbit_oauth.dart';
 import '../../../app/theme/app_theme.dart';
 
 /// Connect Device screen.
@@ -16,6 +21,86 @@ import '../../../app/theme/app_theme.dart';
 /// In a later step, this button will launch the actual Fitbit OAuth flow.
 class ConnectDeviceScreen extends StatelessWidget {
   const ConnectDeviceScreen({super.key});
+
+  static const Duration _backendTimeout = Duration(seconds: 3);
+
+  Future<void> _launchFitbitAuth(BuildContext context) async {
+    final ScaffoldMessengerState messenger = ScaffoldMessenger.of(context);
+
+    try {
+      final Uri authUri = await _resolveFitbitAuthUri();
+      final bool launched = await launchUrl(
+        authUri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!launched && context.mounted) {
+        messenger.showSnackBar(
+          SnackBar(content: Text('Could not open Fitbit sign-in: $authUri')),
+        );
+      }
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      messenger.showSnackBar(
+        SnackBar(content: Text('Could not open Fitbit sign-in: $error')),
+      );
+    }
+  }
+
+  Future<Uri> _resolveFitbitAuthUri() async {
+    Object? lastError;
+
+    for (final String host in carebitBackendHosts()) {
+      final HttpClient httpClient = HttpClient()
+        ..connectionTimeout = _backendTimeout;
+
+      try {
+        final HttpClientRequest request = await httpClient
+            .getUrl(fitbitAuthStartJsonUri(host))
+            .timeout(_backendTimeout);
+        request.headers.set(HttpHeaders.acceptHeader, 'application/json');
+
+        final HttpClientResponse response = await request.close().timeout(
+          _backendTimeout,
+        );
+        final String body = await response.transform(utf8.decoder).join();
+        final Object? decoded = body.isEmpty ? null : jsonDecode(body);
+
+        if (decoded is! Map<String, dynamic>) {
+          throw Exception('Backend returned an invalid Fitbit auth response.');
+        }
+
+        final String? authUrl = decoded['authUrl'] as String?;
+
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+          final String? errorMessage = decoded['error'] as String?;
+          throw Exception(
+            errorMessage ?? 'Backend could not start the Fitbit OAuth flow.',
+          );
+        }
+
+        if (authUrl == null || authUrl.isEmpty) {
+          throw Exception('Backend did not return a Fitbit authorization URL.');
+        }
+
+        return Uri.parse(authUrl);
+      } catch (error) {
+        lastError = error;
+      } finally {
+        httpClient.close(force: true);
+      }
+    }
+
+    throw Exception(
+      'Could not reach the Fitbit backend on any development host. '
+      'Start the Functions emulator and, on a physical Android phone, run '
+      '`adb reverse tcp:5002 tcp:5002`. '
+      'Last error: $lastError',
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -118,8 +203,13 @@ class ConnectDeviceScreen extends StatelessWidget {
                 ),
                 const SizedBox(height: 28),
                 ElevatedButton(
-                  onPressed: () => context.go(RoutePaths.healthMetrics),
+                  onPressed: () => _launchFitbitAuth(context),
                   child: const Text('Connect Device'),
+                ),
+                const SizedBox(height: 12),
+                TextButton(
+                  onPressed: () => context.go(RoutePaths.healthMetrics),
+                  child: const Text('Continue to Health Metrics'),
                 ),
                 const SizedBox(height: 14),
                 Text(
