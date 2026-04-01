@@ -36,7 +36,9 @@ class ConnectDeviceScreen extends StatelessWidget {
 
       if (!launched && context.mounted) {
         messenger.showSnackBar(
-          SnackBar(content: Text('Could not open Fitbit sign-in: $authUri')),
+          const SnackBar(
+            content: Text('Could not open Fitbit sign-in in the browser.'),
+          ),
         );
       }
     } catch (error) {
@@ -45,15 +47,21 @@ class ConnectDeviceScreen extends StatelessWidget {
       }
 
       messenger.showSnackBar(
-        SnackBar(content: Text('Could not open Fitbit sign-in: $error')),
+        SnackBar(
+          content: Text(
+            'Could not open Fitbit sign-in: ${fitbitUserVisibleError(error)}',
+          ),
+        ),
       );
     }
   }
 
   Future<Uri> _resolveFitbitAuthUri() async {
-    Object? lastError;
+    final List<String> backendHosts = carebitBackendHosts(
+      preferredHost: preferredCarebitBackendHost(),
+    );
 
-    for (final String host in carebitBackendHosts()) {
+    for (final String host in backendHosts) {
       final HttpClient httpClient = HttpClient()
         ..connectionTimeout = _backendTimeout;
 
@@ -76,9 +84,11 @@ class ConnectDeviceScreen extends StatelessWidget {
         final String? authUrl = decoded['authUrl'] as String?;
 
         if (response.statusCode < 200 || response.statusCode >= 300) {
-          final String? errorMessage = decoded['error'] as String?;
           throw Exception(
-            errorMessage ?? 'Backend could not start the Fitbit OAuth flow.',
+            extractFitbitBackendErrorMessage(
+              body,
+              fallbackMessage: 'Backend could not start the Fitbit OAuth flow.',
+            ),
           );
         }
 
@@ -86,20 +96,16 @@ class ConnectDeviceScreen extends StatelessWidget {
           throw Exception('Backend did not return a Fitbit authorization URL.');
         }
 
+        rememberCarebitBackendHost(host);
         return Uri.parse(authUrl);
-      } catch (error) {
-        lastError = error;
+      } catch (_) {
+        // Try the next available backend target.
       } finally {
         httpClient.close(force: true);
       }
     }
 
-    throw Exception(
-      'Could not reach the Fitbit backend on any development host. '
-      'Start the Functions emulator and, on a physical Android phone, run '
-      '`adb reverse tcp:5002 tcp:5002`. '
-      'Last error: $lastError',
-    );
+    throw Exception(fitbitBackendConnectionErrorMessage(duringCallback: false));
   }
 
   @override
@@ -187,10 +193,10 @@ class ConnectDeviceScreen extends StatelessWidget {
                         Text(
                           '- Tap Connect Device\n'
                           '- Start Fitbit OAuth\n'
-                          '- Authenticate securely through backend\n'
-                          '- Detect linked wearable information\n'
-                          '- Store watch data in Firestore collection: ${AppConstants.watchDataCollection}\n'
-                          '- Redirect to Health Metrics automatically',
+                          '- Fetch authUrl from backend /fitbitAuthStart\n'
+                          '- Open Fitbit login in external browser\n'
+                          '- Return to the app flow in the next setup step\n'
+                          '- Store watch data later in Firestore collection: ${AppConstants.watchDataCollection}',
                           style: TextStyle(
                             fontSize: 15,
                             height: 1.7,

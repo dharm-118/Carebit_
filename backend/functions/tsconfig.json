@@ -5,8 +5,8 @@
     "lib": [
       "ES2022"
     ],
-    "rootDir": "src",
-    "outDir": "lib",
+    "rootDir": "./src",
+    "outDir": "./lib",
     "strict": true,
     "esModuleInterop": true,
     "moduleResolution": "node",
@@ -20,6 +20,10 @@
   },
   "compileOnSave": true,
   "include": [
-    "src"
+    "src/**/*.ts"
+  ],
+  "exclude": [
+    "lib",
+    "node_modules"
   ]
 }

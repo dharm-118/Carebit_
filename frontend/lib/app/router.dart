@@ -1,4 +1,3 @@
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_client/constants/route_paths.dart';
 
@@ -10,9 +9,9 @@ import '../features/splash/presentation/splash_screen.dart';
 ///
 /// Route path values are imported from the shared mobile_client layer so the
 /// frontend does not duplicate hardcoded navigation strings.
-final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((ref) {
+GoRouter buildAppRouter({required String initialLocation}) {
   return GoRouter(
-    initialLocation: RoutePaths.splash,
+    initialLocation: initialLocation,
     routes: <GoRoute>[
       GoRoute(
         path: RoutePaths.splash,
@@ -28,4 +27,4 @@ final Provider<GoRouter> appRouterProvider = Provider<GoRouter>((ref) {
       ),
     ],
   );
-});
+}

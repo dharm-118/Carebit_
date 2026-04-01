@@ -7,9 +7,9 @@
     "node": "20"
   },
   "scripts": {
-    "build": "tsc",
-    "serve": "firebase emulators:start --only functions",
-    "deploy": "firebase deploy --only functions"
+    "build": "tsc --project tsconfig.json",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "deploy": "npm run build && firebase deploy --only functions"
   },
   "dependencies": {
     "firebase-admin": "^13.0.0",
