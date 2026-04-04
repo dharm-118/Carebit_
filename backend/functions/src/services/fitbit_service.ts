@@ -9,7 +9,7 @@ type FitbitErrorPayload = {
   success?: boolean;
 };
 
-type FitbitTokenResponse = {
+export type FitbitTokenResponse = {
   access_token: string;
   expires_in: number;
   refresh_token: string;
@@ -17,6 +17,56 @@ type FitbitTokenResponse = {
   token_type: string;
   user_id: string;
 };
+
+export type FitbitDevicePayload = {
+  battery: string | null;
+  batteryLevel: number | null;
+  deviceId: string;
+  deviceName: string;
+  deviceType: string | null;
+  lastSyncTime: string | null;
+  macAddress: string | null;
+  rawPayload: Record<string, unknown>;
+};
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value == null || Array.isArray(value)) {
+    return null;
+  }
+
+  return value as Record<string, unknown>;
+}
+
+function asString(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+
+  const normalizedValue = value.trim();
+  return normalizedValue.length === 0 ? null : normalizedValue;
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsedValue = Number.parseFloat(value);
+    return Number.isFinite(parsedValue) ? parsedValue : null;
+  }
+
+  return null;
+}
+
+function parseLastSyncTime(value: string | null): number {
+  if (value == null) {
+    return 0;
+  }
+
+  const parsedTimestamp = Date.parse(value);
+  return Number.isNaN(parsedTimestamp) ? 0 : parsedTimestamp;
+}
 
 function buildBasicAuthHeader(): string {
   const credentials = `${fitbitConfig.clientId}:${fitbitConfig.clientSecret}`;
@@ -106,6 +156,65 @@ export async function exchangeCodeForTokens(
 
 export async function fetchFitbitDevices(accessToken: string): Promise<unknown> {
   return fetchFitbitJson('/1/user/-/devices.json', accessToken);
+}
+
+export function selectPrimaryFitbitDevice(
+  devicesPayload: unknown,
+): FitbitDevicePayload | null {
+  if (!Array.isArray(devicesPayload)) {
+    return null;
+  }
+
+  const normalizedDevices = devicesPayload
+    .map((entry) => {
+      const rawPayload = asRecord(entry);
+      if (rawPayload == null) {
+        return null;
+      }
+
+      const deviceId =
+        asString(rawPayload.id) ?? asString(rawPayload.deviceId) ?? null;
+      if (deviceId == null) {
+        return null;
+      }
+
+      const deviceType = asString(rawPayload.type);
+      const deviceName =
+        asString(rawPayload.deviceVersion) ??
+        deviceType ??
+        `Fitbit device ${deviceId}`;
+
+      return {
+        battery: asString(rawPayload.battery),
+        batteryLevel: asNumber(rawPayload.batteryLevel),
+        deviceId,
+        deviceName,
+        deviceType,
+        lastSyncTime: asString(rawPayload.lastSyncTime),
+        macAddress: asString(rawPayload.mac),
+        rawPayload,
+      };
+    })
+    .filter((device): device is FitbitDevicePayload => device != null);
+
+  if (normalizedDevices.length === 0) {
+    return null;
+  }
+
+  normalizedDevices.sort((left, right) => {
+    // Prefer the most recently synced device, then fall back to a stable ID sort.
+    const syncDelta =
+      parseLastSyncTime(right.lastSyncTime) -
+      parseLastSyncTime(left.lastSyncTime);
+
+    if (syncDelta !== 0) {
+      return syncDelta;
+    }
+
+    return left.deviceId.localeCompare(right.deviceId);
+  });
+
+  return normalizedDevices[0];
 }
 
 export async function fetchFitbitHealthMetrics(

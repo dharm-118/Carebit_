@@ -1,10 +1,13 @@
 import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:mobile_client/constants/app_constants.dart';
 import 'package:mobile_client/models/health_metric.dart';
+import 'package:mobile_client/models/watch_data.dart';
 
 import '../../../app/theme/app_theme.dart';
+import '../application/connected_device_provider.dart';
 
 /// Starter health metrics screen.
 ///
@@ -13,13 +16,16 @@ import '../../../app/theme/app_theme.dart';
 /// - fetch health metrics from Firestore
 /// - display real Fitbit-synced values
 /// - show anomaly cards based on stored data
-class HealthMetricsScreen extends StatelessWidget {
+class HealthMetricsScreen extends ConsumerWidget {
   const HealthMetricsScreen({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final ThemeData theme = Theme.of(context);
     final CarebitColors colors = context.carebitColors;
+    final AsyncValue<WatchData?> connectedDeviceAsync = ref.watch(
+      connectedFitbitDeviceProvider,
+    );
 
     /// Step 3: Using shared HealthMetric model from mobile_client.
     final List<HealthMetric> placeholderMetrics = <HealthMetric>[
@@ -81,6 +87,14 @@ class HealthMetricsScreen extends StatelessWidget {
                 children: <Widget>[
                   _HealthHeader(healthScore: 78),
                   const SizedBox(height: 22),
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 18),
+                    child: _ConnectedDeviceCard(
+                      connectedDeviceAsync: connectedDeviceAsync,
+                      colors: colors,
+                    ),
+                  ),
+                  const SizedBox(height: 20),
                   _WeeklySummarySection(colors: colors),
                   const SizedBox(height: 20),
                   _AnomaliesSection(colors: colors),
@@ -107,6 +121,190 @@ class HealthMetricsScreen extends StatelessWidget {
       ),
     );
   }
+}
+
+class _ConnectedDeviceCard extends StatelessWidget {
+  const _ConnectedDeviceCard({
+    required this.connectedDeviceAsync,
+    required this.colors,
+  });
+
+  final AsyncValue<WatchData?> connectedDeviceAsync;
+  final CarebitColors colors;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(18),
+      decoration: BoxDecoration(
+        color: theme.colorScheme.surface,
+        borderRadius: BorderRadius.circular(24),
+        boxShadow: <BoxShadow>[
+          BoxShadow(
+            color: theme.colorScheme.shadow.withValues(alpha: 0.18),
+            blurRadius: 18,
+            offset: const Offset(0, 10),
+          ),
+        ],
+      ),
+      child: connectedDeviceAsync.when(
+        data: (WatchData? device) {
+          if (device == null) {
+            return _ConnectedDeviceBody(
+              colors: colors,
+              subtitle:
+                  'No Fitbit device record is available in Firestore yet. Complete the connection flow to create it.',
+              title: 'Connected Device',
+              value: 'Waiting for device sync',
+            );
+          }
+
+          return _ConnectedDeviceBody(
+            colors: colors,
+            subtitle:
+                '${device.manufacturer} - ${device.deviceId}\nConnected ${_formatConnectedAt(device.connectedAt)}',
+            title: 'Connected Device',
+            value: device.deviceName,
+          );
+        },
+        error: (Object error, StackTrace stackTrace) {
+          return _ConnectedDeviceBody(
+            colors: colors,
+            subtitle:
+                'Could not load the connected Fitbit device from Firestore.',
+            title: 'Connected Device',
+            value: 'Load failed',
+          );
+        },
+        loading: () {
+          return Row(
+            children: <Widget>[
+              SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2.2,
+                  valueColor: AlwaysStoppedAnimation<Color>(
+                    colors.gradientStart,
+                  ),
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Text(
+                  'Loading connected device from Firestore...',
+                  style: theme.textTheme.bodyMedium?.copyWith(
+                    color: colors.mutedText,
+                    height: 1.4,
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+class _ConnectedDeviceBody extends StatelessWidget {
+  const _ConnectedDeviceBody({
+    required this.colors,
+    required this.subtitle,
+    required this.title,
+    required this.value,
+  });
+
+  final CarebitColors colors;
+  final String subtitle;
+  final String title;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    final ThemeData theme = Theme.of(context);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Container(
+          width: 46,
+          height: 46,
+          decoration: BoxDecoration(
+            color: colors.softBlue,
+            borderRadius: BorderRadius.circular(16),
+          ),
+          child: Icon(Icons.watch_rounded, color: colors.stepsIcon, size: 24),
+        ),
+        const SizedBox(width: 14),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                title,
+                style: theme.textTheme.titleMedium?.copyWith(
+                  color: colors.brandText,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                value,
+                style: theme.textTheme.titleLarge?.copyWith(
+                  color: colors.summaryValue,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 6),
+              Text(
+                subtitle,
+                style: theme.textTheme.bodyMedium?.copyWith(
+                  color: colors.mutedText,
+                  height: 1.45,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+String _formatConnectedAt(DateTime connectedAt) {
+  final DateTime localTimestamp = connectedAt.toLocal();
+  final String month = _monthAbbreviation(localTimestamp.month);
+  final String day = localTimestamp.day.toString().padLeft(2, '0');
+  final String year = localTimestamp.year.toString();
+  final int normalizedHour = localTimestamp.hour % 12 == 0
+      ? 12
+      : localTimestamp.hour % 12;
+  final String minute = localTimestamp.minute.toString().padLeft(2, '0');
+  final String meridiem = localTimestamp.hour >= 12 ? 'PM' : 'AM';
+  return '$month $day, $year at $normalizedHour:$minute $meridiem';
+}
+
+String _monthAbbreviation(int month) {
+  const List<String> months = <String>[
+    'Jan',
+    'Feb',
+    'Mar',
+    'Apr',
+    'May',
+    'Jun',
+    'Jul',
+    'Aug',
+    'Sep',
+    'Oct',
+    'Nov',
+    'Dec',
+  ];
+
+  return months[month - 1];
 }
 
 HealthMetric? _findMetric(List<HealthMetric> metrics, String metricType) {

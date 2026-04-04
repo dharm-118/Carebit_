@@ -1,57 +1,67 @@
-/// Shared watch/device model used by the frontend package.
+/// App model representing a connected wearable device.
+///
+/// This is the clean model the UI/repositories can use,
+/// separate from raw backend DTO transport objects.
 class WatchData {
   const WatchData({
     required this.userId,
+    required this.source,
     required this.deviceId,
     required this.deviceName,
-    required this.manufacturer,
     required this.connectedAt,
-    required this.source,
-    this.firmwareVersion,
-    this.metadata = const <String, dynamic>{},
+    this.manufacturer,
+    this.type,
+    this.batteryLevel,
+    this.lastSyncTime,
+    this.rawPayload = const <String, dynamic>{},
   });
 
   final String userId;
+  final String source;
   final String deviceId;
   final String deviceName;
-  final String manufacturer;
   final DateTime connectedAt;
-  final String source;
-  final String? firmwareVersion;
-  final Map<String, dynamic> metadata;
+  final String? manufacturer;
+  final String? type;
+  final String? batteryLevel;
+  final DateTime? lastSyncTime;
+  final Map<String, dynamic> rawPayload;
 
-  WatchData copyWith({
-    String? userId,
-    String? deviceId,
-    String? deviceName,
-    String? manufacturer,
-    DateTime? connectedAt,
-    String? source,
-    String? firmwareVersion,
-    Map<String, dynamic>? metadata,
-  }) {
+  /// Creates a WatchData model from JSON.
+  factory WatchData.fromJson(Map<String, dynamic> json) {
     return WatchData(
-      userId: userId ?? this.userId,
-      deviceId: deviceId ?? this.deviceId,
-      deviceName: deviceName ?? this.deviceName,
-      manufacturer: manufacturer ?? this.manufacturer,
-      connectedAt: connectedAt ?? this.connectedAt,
-      source: source ?? this.source,
-      firmwareVersion: firmwareVersion ?? this.firmwareVersion,
-      metadata: metadata ?? this.metadata,
+      userId: json['userId']?.toString() ?? '',
+      source: json['source']?.toString() ??
+          json['provider']?.toString() ??
+          'fitbit',
+      deviceId: json['deviceId']?.toString() ?? '',
+      deviceName: json['deviceName']?.toString() ?? 'Unknown Device',
+      connectedAt: DateTime.tryParse(json['connectedAt']?.toString() ?? '') ??
+          DateTime.now(),
+      manufacturer: json['manufacturer']?.toString(),
+      type: json['type']?.toString(),
+      batteryLevel: json['batteryLevel']?.toString(),
+      lastSyncTime: json['lastSyncTime'] != null
+          ? DateTime.tryParse(json['lastSyncTime'].toString())
+          : null,
+      rawPayload:
+          (json['rawPayload'] as Map<String, dynamic>?) ?? <String, dynamic>{},
     );
   }
 
+  /// Converts the WatchData model into JSON.
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
       'userId': userId,
+      'source': source,
       'deviceId': deviceId,
       'deviceName': deviceName,
-      'manufacturer': manufacturer,
       'connectedAt': connectedAt.toIso8601String(),
-      'source': source,
-      'firmwareVersion': firmwareVersion,
-      'metadata': metadata,
+      if (manufacturer != null) 'manufacturer': manufacturer,
+      if (type != null) 'type': type,
+      if (batteryLevel != null) 'batteryLevel': batteryLevel,
+      if (lastSyncTime != null) 'lastSyncTime': lastSyncTime!.toIso8601String(),
+      'rawPayload': rawPayload,
     };
   }
 }

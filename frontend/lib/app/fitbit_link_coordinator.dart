@@ -2,7 +2,14 @@ import 'dart:async';
 
 import 'package:app_links/app_links.dart';
 
-class FitbitLinkCoordinator {
+abstract interface class FitbitLinkSource {
+  Stream<Uri> get uriStream;
+  Object? get startupError;
+
+  Uri? takeStartupUri();
+}
+
+class FitbitLinkCoordinator implements FitbitLinkSource {
   static const Duration _startupLinkTimeout = Duration(milliseconds: 800);
 
   FitbitLinkCoordinator({AppLinks? appLinks})
@@ -18,8 +25,10 @@ class FitbitLinkCoordinator {
   Object? _startupError;
   bool _initialized = false;
 
+  @override
   Stream<Uri> get uriStream => _uriStreamController.stream;
 
+  @override
   Object? get startupError => _startupError;
 
   Future<void> initialize() async {
@@ -74,6 +83,7 @@ class FitbitLinkCoordinator {
     }
   }
 
+  @override
   Uri? takeStartupUri() {
     final Uri? uri = _startupUri;
     _startupUri = null;

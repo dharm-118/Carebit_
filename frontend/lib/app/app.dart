@@ -1,292 +1,209 @@
 import 'dart:async';
-import 'dart:convert';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:mobile_client/constants/route_paths.dart';
 
+import 'fitbit_callback_coordinator.dart';
 import 'fitbit_link_coordinator.dart';
-import 'fitbit_oauth.dart';
 import 'router.dart';
 import 'theme/app_theme.dart';
 
-final GlobalKey<ScaffoldMessengerState> appScaffoldMessengerKey =
-    GlobalKey<ScaffoldMessengerState>();
+/// Root application widget.
+///
+/// This widget connects the router, shared theme, and the Fitbit callback flow.
+class CarebitApp extends ConsumerStatefulWidget {
+  const CarebitApp({super.key, this.linkCoordinator});
 
-class CarebitApp extends StatefulWidget {
-  const CarebitApp({required this.linkCoordinator, super.key});
-
-  final FitbitLinkCoordinator linkCoordinator;
+  /// Optional link coordinator injected for deep-link handling.
+  /// Primarily used in widget tests to provide a fake link source.
+  final FitbitLinkSource? linkCoordinator;
 
   @override
-  State<CarebitApp> createState() => _CarebitAppState();
+  ConsumerState<CarebitApp> createState() => _CarebitAppState();
 }
 
-class _CarebitAppState extends State<CarebitApp> {
-  static const Duration _backendTimeout = Duration(seconds: 3);
+class _CarebitAppState extends ConsumerState<CarebitApp> {
+  final GlobalKey<ScaffoldMessengerState> _scaffoldMessengerKey =
+      GlobalKey<ScaffoldMessengerState>();
+
+  late final FitbitCallbackCoordinator _callbackCoordinator;
+  late final FitbitLinkSource _linkSource;
+  late final GoRouter _router;
 
   StreamSubscription<Uri>? _uriSubscription;
-  bool _isHandlingFitbitCallback = false;
-  bool _isFinalizingFitbitCallback = false;
-  String? _pendingStartupMessage;
-  String? _lastHandledFitbitCallback;
-  GoRouter? _router;
+  FitbitLinkCoordinator? _ownedLinkCoordinator;
+  Future<void> _callbackTask = Future<void>.value();
+  bool _disposed = false;
 
   @override
   void initState() {
     super.initState();
-    _uriSubscription = widget.linkCoordinator.uriStream.listen(
+
+    _router = buildAppRouter(initialLocation: RoutePaths.splash);
+    _callbackCoordinator = ref.read(fitbitCallbackCoordinatorProvider);
+    _callbackCoordinator.addListener(_handleDeliveredOutcome);
+
+    if (widget.linkCoordinator == null) {
+      _ownedLinkCoordinator = FitbitLinkCoordinator();
+      _linkSource = _ownedLinkCoordinator!;
+    } else {
+      _linkSource = widget.linkCoordinator!;
+    }
+
+    _uriSubscription = _linkSource.uriStream.listen(
       (Uri uri) {
-        if (_router == null) {
-          return;
-        }
-
-        unawaited(_handleFitbitCallback(uri));
+        _queueCallbackTask(() => _processCallbackUri(uri));
       },
-      onError: (_) {
-        _showMessage('Could not read the Fitbit callback URL.');
+      onError: (Object error, StackTrace stackTrace) {
+        _showMessage('Could not read the Fitbit callback link: $error');
       },
     );
-    unawaited(_initializeApp());
-  }
 
-  Future<void> _initializeApp() async {
-    final Uri? initialUri = widget.linkCoordinator.takeStartupUri();
-    final bool launchedFromFitbitCallback =
-        initialUri != null && isFitbitCallbackUri(initialUri);
-
-    if (widget.linkCoordinator.startupError != null) {
-      _pendingStartupMessage = 'Could not read the Fitbit callback URL.';
-    }
-
-    _router = buildAppRouter(
-      initialLocation: launchedFromFitbitCallback
-          ? RoutePaths.healthMetrics
-          : RoutePaths.splash,
-    );
-
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {});
-    _flushPendingMessage();
-
-    if (initialUri != null) {
-      await _handleFitbitCallback(
-        initialUri,
-        redirectToConnectOnFailure: launchedFromFitbitCallback,
-      );
-      _flushPendingMessage();
-    }
-  }
-
-  Future<void> _handleFitbitCallback(
-    Uri uri, {
-    bool redirectToConnectOnFailure = false,
-  }) async {
-    final String callbackKey = uri.toString();
-
-    if (!isFitbitCallbackUri(uri) ||
-        _isHandlingFitbitCallback ||
-        _lastHandledFitbitCallback == callbackKey) {
-      return;
-    }
-
-    _isHandlingFitbitCallback = true;
-
-    try {
-      final String? oauthError = uri.queryParameters['error'];
-
-      if (oauthError != null && oauthError.isNotEmpty) {
-        throw Exception('Fitbit sign-in failed: $oauthError');
-      }
-
-      final String? code = uri.queryParameters['code'];
-
-      if (code == null || code.trim().isEmpty) {
-        throw Exception('Fitbit sign-in did not return an authorization code.');
-      }
-
-      if (mounted) {
-        setState(() {
-          _isFinalizingFitbitCallback = true;
-        });
-      }
-      _router?.go(RoutePaths.healthMetrics);
-
-      await _exchangeFitbitCode(
-        code: code.trim(),
-        state: uri.queryParameters['state'],
-      );
-
-      _lastHandledFitbitCallback = callbackKey;
-      _router?.go(RoutePaths.healthMetrics);
-      _showMessage('Fitbit account connected successfully.');
-    } catch (error) {
-      _lastHandledFitbitCallback = callbackKey;
-      if (redirectToConnectOnFailure) {
-        _router?.go(RoutePaths.connectDevice);
-      }
-      _showMessage(
-        'Could not finish Fitbit sign-in: ${fitbitUserVisibleError(error)}',
-      );
-    } finally {
-      _isHandlingFitbitCallback = false;
-      if (mounted && _isFinalizingFitbitCallback) {
-        setState(() {
-          _isFinalizingFitbitCallback = false;
-        });
-      }
-    }
-  }
-
-  Future<void> _exchangeFitbitCode({
-    required String code,
-    String? state,
-  }) async {
-    final List<String> backendHosts = carebitBackendHosts(
-      preferredHost: preferredCarebitBackendHost(),
-    );
-
-    for (final String host in backendHosts) {
-      final HttpClient httpClient = HttpClient()
-        ..connectionTimeout = _backendTimeout;
-
-      try {
-        final Uri exchangeUri = fitbitTokenExchangeUri(
-          host: host,
-          code: code,
-          state: state,
-        );
-        final HttpClientRequest request = await httpClient
-            .getUrl(exchangeUri)
-            .timeout(_backendTimeout);
-        request.headers.set(HttpHeaders.acceptHeader, 'application/json');
-
-        final HttpClientResponse response = await request.close().timeout(
-          _backendTimeout,
-        );
-        final String body = await response.transform(utf8.decoder).join();
-
-        if (response.statusCode < 200 || response.statusCode >= 300) {
-          throw Exception(
-            extractFitbitBackendErrorMessage(
-              body,
-              fallbackMessage: 'Fitbit token exchange failed.',
-            ),
-          );
-        }
-
-        rememberCarebitBackendHost(host);
-        return;
-      } catch (_) {
-        // Try the next available backend target.
-      } finally {
-        httpClient.close(force: true);
-      }
-    }
-
-    throw Exception(fitbitBackendConnectionErrorMessage(duringCallback: true));
-  }
-
-  void _showMessage(String message) {
-    final ScaffoldMessengerState? messenger =
-        appScaffoldMessengerKey.currentState;
-
-    if (messenger == null) {
-      _pendingStartupMessage = message;
-      return;
-    }
-
-    messenger.showSnackBar(SnackBar(content: Text(message)));
-  }
-
-  void _flushPendingMessage() {
-    final String? message = _pendingStartupMessage;
-
-    if (message == null) {
-      return;
-    }
-
-    _pendingStartupMessage = null;
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (!mounted) {
-        return;
-      }
-
-      appScaffoldMessengerKey.currentState?.showSnackBar(
-        SnackBar(content: Text(message)),
-      );
-    });
+    unawaited(_initializeCallbackHandling());
   }
 
   @override
   void dispose() {
-    _uriSubscription?.cancel();
+    _disposed = true;
+    _callbackCoordinator.removeListener(_handleDeliveredOutcome);
+    unawaited(_uriSubscription?.cancel());
+    if (_ownedLinkCoordinator != null) {
+      unawaited(_ownedLinkCoordinator!.dispose());
+    }
     super.dispose();
   }
 
-  @override
-  Widget build(BuildContext context) {
-    final GoRouter? router = _router;
+  Future<void> _initializeCallbackHandling() async {
+    try {
+      if (_ownedLinkCoordinator != null) {
+        await _ownedLinkCoordinator!.initialize();
+      }
 
-    if (router == null) {
-      return MaterialApp(
-        title: 'Carebit',
-        debugShowCheckedModeBanner: false,
-        theme: AppTheme.lightTheme,
-        scaffoldMessengerKey: appScaffoldMessengerKey,
-        home: const Scaffold(body: SizedBox.shrink()),
-      );
+      final Uri? startupUri = _linkSource.takeStartupUri();
+      if (startupUri != null) {
+        _queueCallbackTask(() => _processCallbackUri(startupUri));
+        return;
+      }
+
+      _queueCallbackTask(_resumePendingCallbackIfNeeded);
+    } catch (error) {
+      _showMessage('Could not initialize Fitbit callback handling: $error');
+    }
+  }
+
+  void _queueCallbackTask(Future<void> Function() task) {
+    _callbackTask = _callbackTask.then((_) async {
+      if (_disposed) {
+        return;
+      }
+
+      try {
+        await task();
+      } catch (error) {
+        _showMessage('Could not finish Fitbit sign-in: $error');
+      }
+    });
+  }
+
+  Future<void> _processCallbackUri(Uri uri) async {
+    final FitbitCallbackOutcome outcome = await _callbackCoordinator.process(
+      uri,
+    );
+    _handleCallbackOutcome(outcome);
+  }
+
+  Future<void> _resumePendingCallbackIfNeeded() async {
+    final bool hasPendingSession = await _callbackCoordinator
+        .hasResumablePendingCallbackSession();
+    if (!hasPendingSession) {
+      return;
     }
 
+    final FitbitCallbackOutcome outcome = await _callbackCoordinator
+        .resumePendingCallback();
+    _handleCallbackOutcome(outcome);
+  }
+
+  void _handleDeliveredOutcome() {
+    final FitbitCallbackOutcome? deliveredOutcome = _callbackCoordinator
+        .takeDeliveredOutcome();
+    if (deliveredOutcome == null) {
+      return;
+    }
+
+    _handleCallbackOutcome(deliveredOutcome);
+  }
+
+  void _handleCallbackOutcome(FitbitCallbackOutcome outcome) {
+    if (_disposed) {
+      return;
+    }
+
+    switch (outcome.type) {
+      case FitbitCallbackOutcomeType.success:
+        if (outcome.shouldShowMessage) {
+          _showMessage(outcome.message!);
+        }
+        _navigate(RoutePaths.healthMetrics);
+        break;
+      case FitbitCallbackOutcomeType.failed:
+      case FitbitCallbackOutcomeType.rejected:
+        if (outcome.shouldShowMessage) {
+          _showMessage(outcome.message!);
+        }
+        if (outcome.shouldRedirectToConnectDevice) {
+          _navigate(RoutePaths.connectDevice);
+        }
+        break;
+      case FitbitCallbackOutcomeType.duplicate:
+      case FitbitCallbackOutcomeType.ignored:
+      case FitbitCallbackOutcomeType.pending:
+        break;
+    }
+  }
+
+  void _navigate(String location) {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed) {
+        return;
+      }
+
+      _router.go(location);
+    });
+  }
+
+  void _showMessage(String message) {
+    final String normalizedMessage = message.trim();
+    if (normalizedMessage.isEmpty) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_disposed) {
+        return;
+      }
+
+      final ScaffoldMessengerState? messenger =
+          _scaffoldMessengerKey.currentState;
+      if (messenger == null) {
+        return;
+      }
+
+      messenger.hideCurrentSnackBar();
+      messenger.showSnackBar(SnackBar(content: Text(normalizedMessage)));
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
     return MaterialApp.router(
       title: 'Carebit',
       debugShowCheckedModeBanner: false,
+      scaffoldMessengerKey: _scaffoldMessengerKey,
       theme: AppTheme.lightTheme,
-      scaffoldMessengerKey: appScaffoldMessengerKey,
-      routerConfig: router,
-      builder: (BuildContext context, Widget? child) {
-        return Stack(
-          children: <Widget>[
-            child ?? const SizedBox.shrink(),
-            if (_isFinalizingFitbitCallback)
-              const _FitbitCallbackTransitionOverlay(),
-          ],
-        );
-      },
-    );
-  }
-}
-
-class _FitbitCallbackTransitionOverlay extends StatelessWidget {
-  const _FitbitCallbackTransitionOverlay();
-
-  @override
-  Widget build(BuildContext context) {
-    final ThemeData theme = Theme.of(context);
-
-    return ColoredBox(
-      color: theme.scaffoldBackgroundColor,
-      child: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            CircularProgressIndicator(
-              valueColor: AlwaysStoppedAnimation<Color>(
-                theme.colorScheme.primary,
-              ),
-            ),
-            const SizedBox(height: 16),
-            Text(
-              'Finishing Fitbit connection...',
-              style: theme.textTheme.titleMedium,
-            ),
-          ],
-        ),
-      ),
+      routerConfig: _router,
     );
   }
 }

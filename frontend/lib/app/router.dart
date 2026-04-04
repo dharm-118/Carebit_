@@ -28,3 +28,7 @@ GoRouter buildAppRouter({required String initialLocation}) {
     ],
   );
 }
+
+final GoRouter appRouter = buildAppRouter(
+  initialLocation: RoutePaths.splash,
+);

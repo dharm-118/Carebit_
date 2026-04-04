@@ -1,99 +1,45 @@
-import '../models/health_metric.dart';
-
-/// Transfer object used for health metric payloads.
+/// DTO representing raw health metric data returned by backend APIs.
+///
+/// This object is useful for parsing server responses
+/// before mapping into strongly typed app models.
 class HealthMetricDto {
   const HealthMetricDto({
-    required this.userId,
     required this.metricType,
     required this.value,
     required this.unit,
     required this.timestamp,
     required this.source,
-    required this.deviceId,
-    this.rawPayload = const <String, dynamic>{},
+    required this.rawPayload,
   });
 
-  final String userId;
   final String metricType;
-  final double value;
+  final String value;
   final String unit;
-  final DateTime timestamp;
+  final String timestamp;
   final String source;
-  final String deviceId;
   final Map<String, dynamic> rawPayload;
 
+  /// Creates a DTO from JSON.
   factory HealthMetricDto.fromJson(Map<String, dynamic> json) {
     return HealthMetricDto(
-      userId: _asString(json['userId']),
-      metricType: _asString(json['metricType']),
-      value: _asDouble(json['value']),
-      unit: _asString(json['unit']),
-      timestamp: _asDateTime(json['timestamp']),
-      source: _asString(json['source']),
-      deviceId: _asString(json['deviceId']),
-      rawPayload: _asMap(json['rawPayload']),
+      metricType: json['metricType']?.toString() ?? 'unknown',
+      value: json['value']?.toString() ?? '',
+      unit: json['unit']?.toString() ?? '',
+      timestamp: json['timestamp']?.toString() ?? '',
+      source: json['source']?.toString() ?? 'fitbit',
+      rawPayload: json,
     );
   }
 
+  /// Converts the DTO back into JSON.
   Map<String, dynamic> toJson() {
     return <String, dynamic>{
-      'userId': userId,
       'metricType': metricType,
       'value': value,
       'unit': unit,
-      'timestamp': timestamp.toIso8601String(),
+      'timestamp': timestamp,
       'source': source,
-      'deviceId': deviceId,
       'rawPayload': rawPayload,
     };
   }
-
-  HealthMetric toModel() {
-    return HealthMetric(
-      userId: userId,
-      metricType: metricType,
-      value: value,
-      unit: unit,
-      timestamp: timestamp,
-      source: source,
-      deviceId: deviceId,
-      rawPayload: rawPayload,
-    );
-  }
-}
-
-String _asString(Object? value) => value?.toString() ?? '';
-
-double _asDouble(Object? value) {
-  if (value is num) {
-    return value.toDouble();
-  }
-
-  return double.tryParse(value?.toString() ?? '') ?? 0;
-}
-
-DateTime _asDateTime(Object? value) {
-  if (value is DateTime) {
-    return value;
-  }
-
-  if (value is String) {
-    return DateTime.tryParse(value) ?? DateTime.fromMillisecondsSinceEpoch(0);
-  }
-
-  return DateTime.fromMillisecondsSinceEpoch(0);
-}
-
-Map<String, dynamic> _asMap(Object? value) {
-  if (value is Map<String, dynamic>) {
-    return value;
-  }
-
-  if (value is Map) {
-    return value.map(
-      (dynamic key, dynamic entryValue) => MapEntry(key.toString(), entryValue),
-    );
-  }
-
-  return <String, dynamic>{};
 }

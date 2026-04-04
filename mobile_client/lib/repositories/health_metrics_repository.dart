@@ -1,31 +1,46 @@
 import '../core/result.dart';
+import '../dto/health_metric_dto.dart';
 import '../models/health_metric.dart';
 import '../services/fitbit_api_service.dart';
 
-/// Repository wrapper around the shared Fitbit API service for health metrics.
+/// Repository responsible for converting raw health metric DTOs
+/// into clean app models.
 class HealthMetricsRepository {
-  HealthMetricsRepository({FitbitApiService? apiService})
-    : _apiService = apiService ?? FitbitApiService();
+  HealthMetricsRepository({
+    FitbitApiService? apiService,
+  }) : _apiService = apiService ?? const FitbitApiService();
 
   final FitbitApiService _apiService;
 
-  Future<Result<List<HealthMetric>>> getWeeklyMetrics({
-    String userId = 'demo-user',
-    String deviceId = 'fitbit-sense-2',
+  /// Fetches health metrics and maps them into HealthMetric models.
+  Future<Result<List<HealthMetric>>> getHealthMetrics({
+    String userId = 'placeholder-user',
+    String deviceId = 'placeholder-device',
   }) async {
-    try {
-      final dtos = await _apiService.fetchWeeklyHealthMetrics(
-        userId: userId,
-        deviceId: deviceId,
-      );
+    final Result<List<HealthMetricDto>> result =
+        await _apiService.fetchHealthMetrics();
 
-      return ResultSuccess<List<HealthMetric>>(
-        dtos.map((dto) => dto.toModel()).toList(growable: false),
-      );
-    } catch (error) {
-      return ResultFailure<List<HealthMetric>>(
-        'Failed to load weekly metrics: $error',
+    if (!result.isSuccess || result.data == null) {
+      return Result.failure(
+        result.errorMessage ?? 'Unknown health metrics repository error',
       );
     }
+
+    final List<HealthMetric> metrics = result.data!
+        .map(
+          (HealthMetricDto dto) => HealthMetric(
+            userId: userId,
+            metricType: dto.metricType,
+            value: dto.value,
+            unit: dto.unit,
+            timestamp: DateTime.tryParse(dto.timestamp) ?? DateTime.now(),
+            source: dto.source,
+            deviceId: deviceId,
+            rawPayload: dto.rawPayload,
+          ),
+        )
+        .toList();
+
+    return Result.success(metrics);
   }
 }

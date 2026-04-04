@@ -1,75 +1,143 @@
+import 'dart:convert';
+
 import 'package:http/http.dart' as http;
 
 import '../constants/app_constants.dart';
+import '../core/result.dart';
 import '../dto/device_dto.dart';
 import '../dto/health_metric_dto.dart';
 
-/// Shared API service scaffold for future Fitbit integration.
+/// Service responsible for making raw HTTP requests to backend APIs.
 ///
-/// The HTTP client is already part of the package so this layer can move to
-/// real API calls later without changing the package structure.
+/// The Flutter app never exchanges Fitbit client secrets directly.
+/// It only talks to the Carebit backend.
 class FitbitApiService {
-  FitbitApiService({http.Client? client}) : _client = client ?? http.Client();
+  const FitbitApiService();
 
-  final http.Client _client;
+  /// Calls the backend OAuth start endpoint and returns the Fitbit auth URL.
+  Future<Result<String>> fetchAuthorizationUrl() async {
+    try {
+      final Uri uri = Uri.parse(
+        '${AppConstants.backendBaseUrl}${AppConstants.fitbitAuthStartEndpoint}',
+      );
 
-  Future<DeviceDto> fetchConnectedDevice({required String userId}) async {
-    return DeviceDto(
-      userId: userId,
-      deviceId: 'fitbit-sense-2',
-      deviceName: 'Fitbit Sense 2',
-      manufacturer: 'Fitbit',
-      connectedAt: DateTime.now().subtract(const Duration(days: 3)),
-      source: AppConstants.providerFitbit,
-      firmwareVersion: '194.61.1',
-      metadata: const <String, dynamic>{
-        'batteryLevel': 93,
-        'bluetoothState': 'connected',
-      },
-    );
+      final http.Response response = await http
+          .get(uri)
+          .timeout(
+            const Duration(seconds: AppConstants.apiTimeoutInSeconds),
+          );
+
+      if (response.statusCode != 200) {
+        return Result.failure(
+          'Failed to start Fitbit OAuth. Status: ${response.statusCode}',
+        );
+      }
+
+      final Map<String, dynamic> decoded =
+          jsonDecode(response.body) as Map<String, dynamic>;
+
+      final String? authUrl = decoded['authUrl']?.toString();
+
+      if (authUrl == null || authUrl.isEmpty) {
+        return Result.failure('Backend did not return a valid authUrl.');
+      }
+
+      return Result.success(authUrl);
+    } catch (error) {
+      return Result.failure('OAuth start error: $error');
+    }
   }
 
-  Future<List<HealthMetricDto>> fetchWeeklyHealthMetrics({
-    required String userId,
-    required String deviceId,
-  }) async {
-    final DateTime now = DateTime.now();
+  /// Sends Fitbit OAuth code to backend callback endpoint.
+  Future<Result<Map<String, dynamic>>> exchangeOAuthCode(String code) async {
+    try {
+      final Uri uri = Uri.parse(
+        '${AppConstants.backendBaseUrl}${AppConstants.fitbitAuthCallbackEndpoint}?code=$code',
+      );
 
-    return <HealthMetricDto>[
-      HealthMetricDto(
-        userId: userId,
-        metricType: AppConstants.metricTypeSpo2,
-        value: 97,
-        unit: '%',
-        timestamp: now,
-        source: AppConstants.providerFitbit,
-        deviceId: deviceId,
-        rawPayload: const <String, dynamic>{'quality': 'good'},
-      ),
-      HealthMetricDto(
-        userId: userId,
-        metricType: AppConstants.metricTypeBmr,
-        value: 1500,
-        unit: 'kcal',
-        timestamp: now,
-        source: AppConstants.providerFitbit,
-        deviceId: deviceId,
-        rawPayload: const <String, dynamic>{'confidence': 'estimated'},
-      ),
-      HealthMetricDto(
-        userId: userId,
-        metricType: AppConstants.metricTypeSteps,
-        value: 0,
-        unit: 'steps',
-        timestamp: now,
-        source: AppConstants.providerFitbit,
-        deviceId: deviceId,
-        rawPayload: const <String, dynamic>{'status': 'no_sync_yet'},
-      ),
-    ];
+      final http.Response response = await http
+          .get(uri)
+          .timeout(
+            const Duration(seconds: AppConstants.apiTimeoutInSeconds),
+          );
+
+      if (response.statusCode != 200) {
+        return Result.failure(
+          'Failed to complete OAuth callback. Status: ${response.statusCode}',
+        );
+      }
+
+      final Map<String, dynamic> decoded =
+          jsonDecode(response.body) as Map<String, dynamic>;
+
+      return Result.success(decoded);
+    } catch (error) {
+      return Result.failure('OAuth callback error: $error');
+    }
   }
 
-  void dispose() {
-    _client.close();
+  /// Fetches connected Fitbit-supported devices from backend.
+  Future<Result<List<DeviceDto>>> fetchConnectedDevices() async {
+    try {
+      final Uri uri = Uri.parse(
+        '${AppConstants.backendBaseUrl}${AppConstants.fitbitDevicesEndpoint}',
+      );
+
+      final http.Response response = await http
+          .get(uri)
+          .timeout(
+            const Duration(seconds: AppConstants.apiTimeoutInSeconds),
+          );
+
+      if (response.statusCode != 200) {
+        return Result.failure(
+          'Failed to fetch devices. Status: ${response.statusCode}',
+        );
+      }
+
+      final List<dynamic> decoded = jsonDecode(response.body) as List<dynamic>;
+
+      final List<DeviceDto> devices = decoded
+          .map((dynamic item) => DeviceDto.fromJson(item as Map<String, dynamic>))
+          .toList();
+
+      return Result.success(devices);
+    } catch (error) {
+      return Result.failure('Device fetch error: $error');
+    }
+  }
+
+  /// Fetches health metrics from backend.
+  Future<Result<List<HealthMetricDto>>> fetchHealthMetrics() async {
+    try {
+      final Uri uri = Uri.parse(
+        '${AppConstants.backendBaseUrl}${AppConstants.fitbitHealthMetricsEndpoint}',
+      );
+
+      final http.Response response = await http
+          .get(uri)
+          .timeout(
+            const Duration(seconds: AppConstants.apiTimeoutInSeconds),
+          );
+
+      if (response.statusCode != 200) {
+        return Result.failure(
+          'Failed to fetch health metrics. Status: ${response.statusCode}',
+        );
+      }
+
+      final List<dynamic> decoded = jsonDecode(response.body) as List<dynamic>;
+
+      final List<HealthMetricDto> metrics = decoded
+          .map(
+            (dynamic item) =>
+                HealthMetricDto.fromJson(item as Map<String, dynamic>),
+          )
+          .toList();
+
+      return Result.success(metrics);
+    } catch (error) {
+      return Result.failure('Health metrics fetch error: $error');
+    }
   }
 }

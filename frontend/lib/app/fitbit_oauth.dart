@@ -3,20 +3,31 @@ import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 
+import 'carebit_backend_runtime.dart';
+
 const String _configuredBackendHost = String.fromEnvironment(
   'CAREBIT_BACKEND_HOST',
 );
-const String _defaultAndroidLanHost = '10.0.0.223';
-const String _androidEmulatorHost = '10.0.2.2';
-const String _webLocalHost = '127.0.0.1';
-const String _functionsPort = '5002';
 const String _projectId = 'carebit-e30d4';
 const String _region = 'us-central1';
+const String _deployedFunctionsBaseUri =
+    'https://$_region-$_projectId.cloudfunctions.net';
+const String _androidEmulatorHost = '10.0.2.2';
+const String _androidLoopbackHost = '127.0.0.1';
+const String _webLocalHost = '127.0.0.1';
+const String _cloudFunctionsDomainSuffix = '.cloudfunctions.net';
+const String _cloudRunDomainSuffix = '.run.app';
+const String _functionsPort = '5002';
 
 String? _lastResolvedBackendHost;
 
-List<String> carebitBackendHosts({String? preferredHost}) {
+List<String> carebitBackendHosts({
+  String? preferredHost,
+  CarebitBackendRuntime? runtime,
+}) {
   final LinkedHashSet<String> hosts = LinkedHashSet<String>();
+  final CarebitBackendRuntime resolvedRuntime =
+      runtime ?? CarebitBackendRuntime.currentPlatform();
 
   void addHost(String? host) {
     final String normalizedHost = host?.trim() ?? '';
@@ -32,16 +43,24 @@ List<String> carebitBackendHosts({String? preferredHost}) {
 
   addHost(preferredHost);
   addHost(_lastResolvedBackendHost);
+  addHost(_deployedFunctionsBaseUri);
 
-  if (kIsWeb) {
+  if (resolvedRuntime.isWeb) {
     addHost(_webLocalHost);
     return hosts.toList(growable: false);
   }
 
-  switch (defaultTargetPlatform) {
+  switch (resolvedRuntime.targetPlatform) {
     case TargetPlatform.android:
-      addHost(_defaultAndroidLanHost);
-      addHost(_androidEmulatorHost);
+      if (resolvedRuntime.isAndroidEmulator) {
+        addHost(_androidEmulatorHost);
+        addHost(_androidLoopbackHost);
+      } else if (resolvedRuntime.isKnownPhysicalAndroidDevice) {
+        addHost(_androidLoopbackHost);
+      } else {
+        addHost(_androidLoopbackHost);
+        addHost(_androidEmulatorHost);
+      }
       break;
     default:
       addHost(_webLocalHost);
@@ -66,15 +85,25 @@ String? preferredCarebitBackendHost() {
 }
 
 Uri fitbitAuthStartUri(String host) {
-  return _functionsBaseUri(
-    host,
-  ).replace(path: '$_projectId/$_region/fitbitAuthStart');
+  return _functionEndpointUri(host, 'fitbitAuthStart');
+}
+
+Uri carebitHealthUri(String host) {
+  return _functionEndpointUri(host, 'health');
 }
 
 Uri fitbitAuthStartJsonUri(String host) {
   return fitbitAuthStartUri(
     host,
   ).replace(queryParameters: const <String, String>{'mode': 'json'});
+}
+
+Uri fitbitAuthCallbackUri(String host) {
+  return _functionEndpointUri(host, 'fitbitAuthCallback');
+}
+
+Uri fitbitAuthCallbackStatusUri(String host) {
+  return _functionEndpointUri(host, 'fitbitAuthCallbackStatus');
 }
 
 Uri fitbitTokenExchangeUri({
@@ -88,10 +117,7 @@ Uri fitbitTokenExchangeUri({
     queryParameters['state'] = state;
   }
 
-  return _functionsBaseUri(host).replace(
-    path: '$_projectId/$_region/fitbitAuthCallback',
-    queryParameters: queryParameters,
-  );
+  return fitbitAuthCallbackUri(host).replace(queryParameters: queryParameters);
 }
 
 Uri _functionsBaseUri(String host) {
@@ -100,16 +126,66 @@ Uri _functionsBaseUri(String host) {
   if (configuredUri != null &&
       configuredUri.hasScheme &&
       configuredUri.host.isNotEmpty) {
+    if (configuredUri.hasPort) {
+      return Uri(
+        scheme: configuredUri.scheme,
+        host: configuredUri.host,
+        port: configuredUri.port,
+        path: configuredUri.path,
+      );
+    }
+
+    if (_usesDirectFunctionPath(configuredUri)) {
+      return Uri(
+        scheme: configuredUri.scheme,
+        host: configuredUri.host,
+        path: configuredUri.path,
+      );
+    }
+
     return Uri(
       scheme: configuredUri.scheme,
       host: configuredUri.host,
-      port: configuredUri.hasPort
-          ? configuredUri.port
-          : int.parse(_functionsPort),
+      port: int.parse(_functionsPort),
+      path: configuredUri.path,
     );
   }
 
   return Uri(scheme: 'http', host: host, port: int.parse(_functionsPort));
+}
+
+Uri _functionEndpointUri(String host, String functionName) {
+  final Uri baseUri = _functionsBaseUri(host);
+
+  return baseUri.replace(path: _functionEndpointPath(baseUri, functionName));
+}
+
+String _functionEndpointPath(Uri baseUri, String functionName) {
+  if (_usesDirectFunctionPath(baseUri)) {
+    return _appendPathSegment(baseUri.path, functionName);
+  }
+
+  return '/$_projectId/$_region/$functionName';
+}
+
+bool _usesDirectFunctionPath(Uri baseUri) {
+  if (baseUri.path.trim().isNotEmpty && baseUri.path.trim() != '/') {
+    return true;
+  }
+
+  return baseUri.host.endsWith(_cloudFunctionsDomainSuffix) ||
+      baseUri.host.endsWith(_cloudRunDomainSuffix);
+}
+
+String _appendPathSegment(String basePath, String pathSegment) {
+  if (basePath.isEmpty || basePath == '/') {
+    return '/$pathSegment';
+  }
+
+  final String normalizedBasePath = basePath.endsWith('/')
+      ? basePath.substring(0, basePath.length - 1)
+      : basePath;
+  return '$normalizedBasePath/$pathSegment';
 }
 
 String fitbitBackendConnectionErrorMessage({required bool duringCallback}) {
@@ -119,25 +195,74 @@ String fitbitBackendConnectionErrorMessage({required bool duringCallback}) {
         : 'Could not start Fitbit sign-in.',
   );
 
+  message.write(' ${_fitbitBackendConnectivityGuidance()}');
+  return message.toString();
+}
+
+String fitbitAuthStartHostResolutionErrorMessage({
+  required List<String> attemptedHosts,
+  String? lastError,
+}) {
+  final StringBuffer message = StringBuffer(
+    'Could not reach a Carebit backend that can start Fitbit sign-in.',
+  );
+
+  if (attemptedHosts.isNotEmpty) {
+    message.write(' Tried hosts: ${attemptedHosts.join(', ')}.');
+  }
+
+  final String normalizedLastError = lastError?.trim() ?? '';
+  if (normalizedLastError.isNotEmpty) {
+    message.write(' Last error: $normalizedLastError');
+    if (!normalizedLastError.endsWith('.')) {
+      message.write('.');
+    }
+  }
+
+  message.write(' ${_fitbitBackendConnectivityGuidance()}');
+  return message.toString();
+}
+
+String fitbitNoBackendHostConfiguredMessage({
+  required CarebitBackendRuntime runtime,
+}) {
+  if (runtime.isKnownPhysicalAndroidDevice || runtime.isUnknownAndroidDevice) {
+    return 'No Carebit backend host candidate is available for this Android device. The app normally uses the deployed Firebase Functions backend automatically. To target a local Functions emulator instead, optionally run the app with `--dart-define=CAREBIT_BACKEND_HOST=<YOUR_PC_LAN_IP>` and ensure the emulator is reachable on port $_functionsPort.';
+  }
+
+  return fitbitBackendConnectionErrorMessage(duringCallback: false);
+}
+
+String fitbitBackendConfigurationErrorMessage({
+  required String host,
+  List<String> missing = const <String>[],
+}) {
+  final StringBuffer message = StringBuffer(
+    'Carebit backend host `$host` is reachable, but Fitbit backend configuration is incomplete.',
+  );
+
+  if (missing.isNotEmpty) {
+    message.write(' Missing: ${missing.join(', ')}.');
+  }
+
+  return message.toString();
+}
+
+String _fitbitBackendConnectivityGuidance() {
   if (kIsWeb) {
-    message.write(' Start the Functions emulator on port 5002.');
-    return message.toString();
+    return 'Start the Functions emulator on port 5002.';
   }
 
   switch (defaultTargetPlatform) {
     case TargetPlatform.android:
-      message.write(
-        _configuredBackendHost.trim().isEmpty
-            ? ' On a physical Android phone, the app uses the default LAN backend host `$_defaultAndroidLanHost`. If your Wi-Fi IP changes, update that host or run with `--dart-define=CAREBIT_BACKEND_HOST=<YOUR_PC_LAN_IP>`. The Android emulator continues to use `10.0.2.2` automatically.'
-            : ' Verify that `CAREBIT_BACKEND_HOST` points to a LAN-reachable machine running the Functions emulator on port 5002.',
-      );
-      break;
+      return _configuredBackendHost.trim().isEmpty
+          ? 'The app uses the deployed Firebase Functions backend by default, so plain `flutter run` works without extra flags. To target a local Functions emulator instead, the Android emulator can use `$_androidEmulatorHost`, and a physical Android phone can use `--dart-define=CAREBIT_BACKEND_HOST=<YOUR_PC_LAN_IP>`. Ensure any local emulator is reachable on port $_functionsPort.'
+          : 'Verify that `CAREBIT_BACKEND_HOST` points to a reachable Functions emulator on port $_functionsPort or to a full HTTPS Functions base URL.';
     default:
-      message.write(' Start the Functions emulator on port 5002.');
-      break;
+      return _configuredBackendHost.trim().isEmpty
+          ? 'The app uses the deployed Firebase Functions backend by default. To target a local Functions emulator instead, point `CAREBIT_BACKEND_HOST` at it and ensure it is reachable on port $_functionsPort.'
+          : 'Verify that `CAREBIT_BACKEND_HOST` points to a reachable Functions emulator on port $_functionsPort or to a full HTTPS Functions base URL.';
   }
-
-  return message.toString();
 }
 
 String extractFitbitBackendErrorMessage(

@@ -1,24 +1,50 @@
 import '../core/result.dart';
+import '../dto/device_dto.dart';
 import '../models/watch_data.dart';
 import '../services/fitbit_api_service.dart';
 
-/// Repository wrapper around the shared Fitbit API service for connected devices.
+/// Repository responsible for converting raw device DTOs
+/// into clean WatchData models for app use.
+///
+/// Repositories act as a boundary between:
+/// - transport layer data
+/// - app-friendly models
 class DeviceRepository {
-  DeviceRepository({FitbitApiService? apiService})
-    : _apiService = apiService ?? FitbitApiService();
+  DeviceRepository({
+    FitbitApiService? apiService,
+  }) : _apiService = apiService ?? const FitbitApiService();
 
   final FitbitApiService _apiService;
 
-  Future<Result<WatchData>> getConnectedDevice({
-    String userId = 'demo-user',
+  /// Fetches connected devices and maps them into WatchData models.
+  Future<Result<List<WatchData>>> getConnectedDevices({
+    String userId = 'placeholder-user',
   }) async {
-    try {
-      final dto = await _apiService.fetchConnectedDevice(userId: userId);
-      return ResultSuccess<WatchData>(dto.toModel());
-    } catch (error) {
-      return ResultFailure<WatchData>(
-        'Failed to load connected device: $error',
+    final Result<List<DeviceDto>> result =
+        await _apiService.fetchConnectedDevices();
+
+    if (!result.isSuccess || result.data == null) {
+      return Result.failure(
+        result.errorMessage ?? 'Unknown device repository error',
       );
     }
+
+    final List<WatchData> devices = result.data!
+        .map(
+          (DeviceDto dto) => WatchData(
+            userId: userId,
+            provider: 'fitbit',
+            deviceId: dto.deviceId,
+            deviceName: dto.deviceName,
+            type: dto.type,
+            batteryLevel: dto.batteryLevel,
+            lastSyncTime: null,
+            connectedAt: DateTime.now(),
+            rawPayload: dto.rawPayload,
+          ),
+        )
+        .toList();
+
+    return Result.success(devices);
   }
 }
