@@ -14,9 +14,9 @@ const defaultScopes = [
 ];
 
 export const fitbitConfig = {
-  clientId: process.env.FITBIT_CLIENT_ID ?? '',
-  clientSecret: process.env.FITBIT_CLIENT_SECRET ?? '',
-  redirectUri: process.env.FITBIT_REDIRECT_URI ?? '',
+  clientId: process.env.FITBIT_CLIENT_ID || '23V5JR',
+  clientSecret: process.env.FITBIT_CLIENT_SECRET || 'be5d2de446f8305d9fee9f5d2d862db3',
+  redirectUri: process.env.FITBIT_REDIRECT_URI || 'carebit://fitbit-callback',
   scopes: (
     process.env.FITBIT_SCOPES ??
     defaultScopes.join(' ')
